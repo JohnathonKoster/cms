@@ -109,7 +109,7 @@ class Result implements ContainsQueryableValues, Contract
     public function newAugmentedInstance(): Augmented
     {
         if ($this->searchable instanceof Augmentable) {
-            return $this->searchable->newAugmentedInstance();
+            return new AugmentedResult($this);
         }
 
         throw new \Exception('Searchable '.get_class($this->searchable).' must implement '.Augmentable::class.'.');
