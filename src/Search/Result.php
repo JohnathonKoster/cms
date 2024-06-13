@@ -109,7 +109,6 @@ class Result implements ContainsQueryableValues, Contract
     public function newAugmentedInstance(): Augmented
     {
         if ($this->searchable instanceof Augmentable) {
-            
             return new AugmentedResult($this);
         }
 
