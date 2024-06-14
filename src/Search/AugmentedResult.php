@@ -42,7 +42,7 @@ class AugmentedResult extends AbstractAugmented
 
     public function get($handle): Value
     {
-        if (array_key_exists($handle, $this->extraAugmentedData)) {
+        if (array_key_exists($handle, $this->getExtraAugmentedResultData())) {
             return new Value($this->extraAugmentedData[$handle], $handle);
         }
 
