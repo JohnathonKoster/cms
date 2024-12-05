@@ -919,6 +919,10 @@ class PathDataManager
      */
     private function compact($isFinal)
     {
+        if (! $isFinal && $this->reducedVar instanceof Model) {
+            return;
+        }
+
         if ($this->isForArrayIndex && $isFinal && is_object($this->reducedVar) && method_exists($this->reducedVar, '__toString')) {
             $this->reducedVar = (string) $this->reducedVar;
 
