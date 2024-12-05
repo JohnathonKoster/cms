@@ -647,9 +647,13 @@ class PathDataManager
                             // If we have more steps in the path to take, but we are
                             // not a tag pair, we need to reduce anyway so we
                             // can descend further into the nested values.
-                            $this->lockData();
-                            $this->reducedVar = self::reduce($this->reducedVar, true, $this->shouldDoValueIntercept);
-                            $this->unlockData();
+                            // We skip this step for Models to prevent
+                            // some of the reflection stuff below.
+                            if (! $this->reducedVar instanceof Model) {
+                                $this->lockData();
+                                $this->reducedVar = self::reduce($this->reducedVar, true, $this->shouldDoValueIntercept);
+                                $this->unlockData();
+                            }
                         }
 
                         $this->collapseValues($pathItem->isFinal);
@@ -696,7 +700,11 @@ class PathDataManager
                     $wasBuilderGoingIntoLast = true;
                 }
 
-                $this->reduceVar($pathItem, $data);
+                if ($this->reducedVar instanceof Model) {
+                    $this->reducedVar = $this->reducedVar->__get($pathItem->name);
+                } else {
+                    $this->reduceVar($pathItem, $data);
+                }
 
                 $this->collapseValues($pathItem->isFinal);
 
@@ -959,6 +967,10 @@ class PathDataManager
     {
         $reductionStack = [$value];
         $returnValue = $value;
+
+        if ($value instanceof Model && ! $isPair) {
+            return $value;
+        }
 
         while (! empty($reductionStack)) {
             $reductionValue = array_pop($reductionStack);
