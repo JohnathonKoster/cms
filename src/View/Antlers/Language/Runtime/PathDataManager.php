@@ -784,6 +784,10 @@ class PathDataManager
             $this->compact(true);
         }
 
+        if ($this->reducedVar instanceof Model && $this->isPair) {
+            $this->reducedVar = self::reduce($this->reducedVar, true, true, false);
+        }
+
         $this->namedSlotsInScope = false;
         $this->resetInternalState();
 
@@ -965,14 +969,15 @@ class PathDataManager
      * @param  mixed  $value  The value to reduce.
      * @param  bool  $isPair  Indicates if the path belongs to a node pair.
      * @param  bool  $reduceBuildersAndAugmentables  Indicates if Builder and Augmentable instances should be resolved.
+     * @param  bool  $leaveModelsAlone
      * @return array|string
      */
-    public static function reduce($value, $isPair = true, $reduceBuildersAndAugmentables = true)
+    public static function reduce($value, $isPair = true, $reduceBuildersAndAugmentables = true, $leaveModelsAlone = true)
     {
         $reductionStack = [$value];
         $returnValue = $value;
 
-        if ($value instanceof Model && ! $isPair) {
+        if ($value instanceof Model && $leaveModelsAlone) {
             return $value;
         }
 
@@ -1086,6 +1091,10 @@ class PathDataManager
     {
         GlobalRuntimeState::$isEvaluatingUserData = true;
         GlobalRuntimeState::$isEvaluatingData = true;
+
+        if ($value instanceof Model) {
+            return $value;
+        }
 
         if ($value instanceof Collection) {
             $value = $value->all();
