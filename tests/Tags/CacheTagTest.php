@@ -5,6 +5,7 @@ namespace Tests\Tags;
 use Illuminate\Cache\Events\CacheHit;
 use Illuminate\Cache\Events\CacheMissed;
 use Illuminate\Cache\Events\KeyWritten;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Str;
@@ -313,6 +314,21 @@ EXP;
         $this->tag($template);
 
         $this->assertHit();
+    }
+
+    #[Test]
+    public function it_renders_content_when_disabling_cache_using_blade()
+    {
+        config(['statamic.system.cache_tags_enabled' => false]);
+
+        $template = <<<'BLADE'
+<s:cache for="5 minutes">Hello, world!</s:cache>
+BLADE;
+
+        $this->assertSame(
+            'Hello, world!',
+            Blade::render($template)
+        );
     }
 
     private function assertHit($contentValue = 'expensive')
