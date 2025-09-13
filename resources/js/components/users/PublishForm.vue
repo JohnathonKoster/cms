@@ -14,7 +14,7 @@
             >
                 <Dropdown>
                     <template #trigger>
-                        <Button icon="ui/dots" variant="ghost" :aria-label="__('Open dropdown menu')" />
+                        <Button icon="dots" variant="ghost" :aria-label="__('Open dropdown menu')" />
                     </template>
                     <DropdownMenu>
                         <DropdownItem :text="__('Edit Blueprint')" icon="blueprint-edit" v-if="canEditBlueprint" :href="actions.editBlueprint" />
@@ -44,6 +44,7 @@
                 :text="__('Save')"
                 icon="save"
                 :action="save"
+                keys="mod+s"
                 prioritize
                 v-slot="{ text, action }"
             >
@@ -86,7 +87,7 @@ import {
 } from '@/components/ui';
 import ItemActions from '@/components/actions/ItemActions.vue';
 import { computed, ref } from 'vue';
-import { Pipeline, Request, BeforeSaveHooks, AfterSaveHooks, PipelineStopped } from '@/components/ui/Publish/SavePipeline.js';
+import { Pipeline, Request, BeforeSaveHooks, AfterSaveHooks, PipelineStopped } from '@ui/Publish/SavePipeline.js';
 
 let saving = ref(false);
 let errors = ref({});

@@ -323,7 +323,7 @@ export default {
             return [
                 {
                     title: __('Expand All Sets'),
-                    icon: 'ui/expand',
+                    icon: 'expand',
                     quick: true,
                     visibleWhenReadOnly: true,
                     run: this.expandAll,
@@ -331,7 +331,7 @@ export default {
                 },
                 {
                     title: __('Collapse All Sets'),
-                    icon: 'ui/collapse',
+                    icon: 'collapse',
                     quick: true,
                     visibleWhenReadOnly: true,
                     run: this.collapseAll,
@@ -339,7 +339,7 @@ export default {
                 },
                 {
                     title: __('Toggle Fullscreen Mode'),
-                    icon: ({ vm }) => (vm.fullScreenMode ? 'ui/collapse-all' : 'ui/expand-all'),
+                    icon: ({ vm }) => (vm.fullScreenMode ? 'collapse-all' : 'expand-all'),
                     quick: true,
                     run: this.toggleFullscreen,
                     visibleWhenReadOnly: true,
@@ -362,8 +362,6 @@ export default {
 
         this.json = this.editor.getJSON().content;
         this.html = this.editor.getHTML();
-
-        this.escBinding = this.$keys.bind('esc', this.closeFullscreen);
 
         this.$nextTick(() => {
             this.mounted = true;
@@ -416,8 +414,14 @@ export default {
             this.updateMeta(meta);
         },
 
-        fullScreenMode() {
+        fullScreenMode(fullScreenMode) {
             this.initEditor();
+
+            if (fullScreenMode) {
+                this.escBinding = this.$keys.bindGlobal('esc', this.closeFullscreen);
+            } else {
+                this.escBinding?.destroy();
+            }
         },
 
         'publishContainer.errors': {
