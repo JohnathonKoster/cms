@@ -5,6 +5,7 @@ namespace Statamic\View\Antlers\Language\Errors;
 use Statamic\View\Antlers\Language\Exceptions\RuntimeException;
 use Statamic\View\Antlers\Language\Exceptions\SyntaxErrorException;
 use Statamic\View\Antlers\Language\Nodes\AbstractNode;
+use Statamic\View\Antlers\Language\Runtime\GlobalRuntimeState;
 
 class ErrorFactory
 {
@@ -18,7 +19,12 @@ class ErrorFactory
      */
     public static function makeSyntaxError($type, $token, $message)
     {
-        $syntaxException = new SyntaxErrorException($message);
+        $syntaxException = new SyntaxErrorException(
+            $message,
+            filename: GlobalRuntimeState::$currentExecutionFile ?? null,
+            line: $token?->startPosition?->line ?? null,
+        );
+
         $syntaxException->node = $token;
         $syntaxException->type = $type;
 
@@ -35,7 +41,12 @@ class ErrorFactory
      */
     public static function makeRuntimeError($type, $token, $message)
     {
-        $runtimeException = new RuntimeException($message);
+        $runtimeException = new RuntimeException(
+            $message,
+            filename: GlobalRuntimeState::$currentExecutionFile ?? null,
+            line: $token?->startPosition?->line ?? null,
+        );
+
         $runtimeException->node = $token;
         $runtimeException->type = $type;
 

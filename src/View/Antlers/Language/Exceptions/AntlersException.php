@@ -2,10 +2,10 @@
 
 namespace Statamic\View\Antlers\Language\Exceptions;
 
-use Exception;
+use ErrorException;
 use Statamic\View\Antlers\Language\Nodes\AbstractNode;
 
-class AntlersException extends Exception
+class AntlersException extends ErrorException
 {
     /**
      * @var AbstractNode|null
