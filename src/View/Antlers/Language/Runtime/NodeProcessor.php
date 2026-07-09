@@ -47,6 +47,7 @@ use Statamic\View\Antlers\Language\Nodes\Structures\StatementSeparatorNode;
 use Statamic\View\Antlers\Language\Nodes\Structures\SwitchGroup;
 use Statamic\View\Antlers\Language\Nodes\VariableNode;
 use Statamic\View\Antlers\Language\Parser\LanguageParser;
+use Statamic\View\Antlers\Language\Runtime\Concerns\ManagesIncludeSlots;
 use Statamic\View\Antlers\Language\Runtime\Debugging\GlobalDebugManager;
 use Statamic\View\Antlers\Language\Runtime\Sandbox\Environment;
 use Statamic\View\Antlers\Language\Runtime\Sandbox\RuntimeValues;
@@ -59,6 +60,8 @@ use Throwable;
 
 class NodeProcessor
 {
+    use ManagesIncludeSlots;
+
     /**
      * @var Loader
      */
@@ -1582,6 +1585,10 @@ class NodeProcessor
                             $this->data = $lockData;
                         }
 
+                        if ($node->name->name == 'include') {
+                            $tagActiveData = $this->captureIncludeSlots($node, $tagActiveData, $tagParameters);
+                        }
+
                         if ($node->name->name == 'partial' || $node->name->name == 'scope') {
                             if (array_key_exists('handle_prefix', $tagParameters)) {
                                 $handlePrefixes = $tagParameters['handle_prefix'];
@@ -2151,6 +2158,17 @@ class NodeProcessor
 
                     if ($val instanceof Builder) {
                         $val = $val->get()->all();
+                    }
+
+                    if ($val instanceof Slot) {
+                        $val = $val->render($node->hasParameters ? $this->getSlotOutputProps($node) : []);
+                        $buffer .= $this->measureBufferAppend($node, $this->modifyBufferAppend($val));
+
+                        if ($this->isTracingEnabled()) {
+                            $this->runtimeConfiguration->traceManager->traceOnExit($node, null);
+                        }
+
+                        continue;
                     }
 
                     $executedParamModifiers = false;

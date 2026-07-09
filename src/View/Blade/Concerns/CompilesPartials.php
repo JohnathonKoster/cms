@@ -17,6 +17,22 @@ trait CompilesPartials
         return $tagName === 'slot' || str($tagName)->startsWith(['slot.', 'slot:']);
     }
 
+    /**
+     * Compiles a slot output site inside an included view, e.g.
+     * <s:slot:row :name="$person['name']" />. Scoped props supplied here are
+     * passed to the deferred slot so its content can use them.
+     */
+    protected function compileSlotOutput(ComponentNode $component): string
+    {
+        // The slot name lives on ->name (e.g. "slot:header"); drop the 5-char
+        // "slot:" / "slot." prefix, mirroring compileSlot(). A bare <s:slot />
+        // outputs the default slot.
+        $name = (string) str($component->name)->substr(5);
+        $name = $name === '' ? 'slot' : $name;
+
+        return '<?php echo \Statamic\View\Blade\BladeSlot::output($'.$name.' ?? null, '.$this->compileParameters($component->parameters).'); ?>';
+    }
+
     protected function isComponentSlot(ComponentNode $parent, ComponentNode $child): bool
     {
         return $child->parent === $parent && $this->isSlotTag($child->tagName);
@@ -58,8 +74,10 @@ trait CompilesPartials
         $params = $component->getParameters()->keyBy(fn (ParameterNode $param) => $param->materializedName);
         $forwardMethods = ['exists', 'if_exists'];
 
-        if (str($component->tagName)->startsWith('partial:')) {
-            $partialName = (string) str($component->tagName)->substr(8);
+        [$baseName, $method, $originalMethod] = $this->extractMethodNames($component);
+
+        if (str($component->tagName)->startsWith($baseName.':')) {
+            $partialName = (string) str($component->tagName)->substr(strlen($baseName) + 1);
 
             if (! in_array($partialName, $forwardMethods)) {
                 $srcParam = new ParameterNode();
@@ -89,7 +107,11 @@ UNSET;
             $injectedParam->setName($name);
             $injectedParam->type = ParameterType::DynamicVariable;
 
-            $injectedParam->value = 'new \Illuminate\Support\HtmlString(\Illuminate\Support\Facades\Blade::render($'.$hoistedVarName.', get_defined_vars()))';
+            // Includes use a deferred BladeSlot so they can support scoped slots.
+            // Partials keep their original eager HtmlString behaviour unchanged.
+            $injectedParam->value = $baseName === 'include'
+                ? 'new \Statamic\View\Blade\BladeSlot($'.$hoistedVarName.', get_defined_vars())'
+                : 'new \Illuminate\Support\HtmlString(\Illuminate\Support\Facades\Blade::render($'.$hoistedVarName.', get_defined_vars()))';
 
             $hoistedSet .= Str::swap([
                 '$varName' => $hoistedVarName,
@@ -134,8 +156,6 @@ unset(
 ?>
 PHP;
 
-        [$name, $method, $originalMethod] = $this->extractMethodNames($component);
-
         if (! in_array(Str::snake($method), $forwardMethods)) {
             $method = $originalMethod = 'index';
         }
@@ -149,7 +169,7 @@ PHP;
                 '#set#' => $hoistedSet,
                 '#unset#' => $hoistedUnset,
                 '$tagMethod' => "'".$method."'",
-                '$tagName' => 'partial',
+                '$tagName' => $baseName,
                 '$originalMethod' => "'".$originalMethod."'",
             ]
         );

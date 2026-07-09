@@ -101,8 +101,10 @@ class StatamicTagCompiler
 
                 if ($node->tagName === 'nocache') {
                     return $this->compileNocache($node);
-                } elseif ($this->isPartial($node)) {
+                } elseif ($this->isPartialOrInclude($node)) {
                     return $this->compilePartial($node);
+                } elseif ($this->isSlotTag($node->tagName)) {
+                    return $this->compileSlotOutput($node);
                 } elseif ($this->interceptNav && $this->isStructure($node->tagName)) {
                     return $this->compileNav($node);
                 }
@@ -118,9 +120,12 @@ class StatamicTagCompiler
         return in_array($tagName, ['nav', 'structure', 'children']);
     }
 
-    protected function isPartial(ComponentNode $component): bool
+    protected function isPartialOrInclude(ComponentNode $component): bool
     {
-        return $component->tagName == 'partial' || str($component->tagName)->lower()->startsWith('partial:');
+        $tagName = str($component->tagName)->lower();
+
+        return $tagName->is(['partial', 'include']) ||
+            $tagName->startsWith(['partial:', 'include:']);
     }
 
     protected function extractMethodNames(ComponentNode $component): array
