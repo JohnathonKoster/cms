@@ -12,6 +12,8 @@ use Statamic\View\Antlers\AntlersString;
  * @method static AntlersString parse(string $str, array $variables = [], bool $trusted = false)
  * @method static string parseLoop(string $content, array $data, bool $supplement = true, array $context = [], bool $trusted = false)
  * @method static array identifiers(string $content)
+ * @method static string instrument(string $template, ?\Statamic\View\Instrumentation\HtmlInstrumentation $instrumentation = null)
+ * @method static \Statamic\View\Antlers\Language\Analyzers\Html\Document html(string $template)
  *
  * @see \Statamic\View\Antlers\Antlers
  */

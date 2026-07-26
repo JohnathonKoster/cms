@@ -69,6 +69,24 @@ class RuntimeParser implements Parser
      */
     private $allowPhp = false;
 
+    /** @var RuntimeConfiguration|null */
+    protected $runtimeConfiguration;
+
+    /**
+     * Source transformers that run before component compilation.
+     *
+     * @var callable[]
+     */
+    protected $beforeComponentCompilationCallbacks = [];
+
+    /**
+     * Visitors last synced from the runtime configuration, so ones removed
+     * from it can be withdrawn from the document parser.
+     *
+     * @var \Statamic\View\Antlers\Language\Runtime\Tracing\NodeVisitorContract[]
+     */
+    protected $syncedVisitors = [];
+
     /**
      * A list of pre-parsers.
      *
@@ -138,6 +156,7 @@ class RuntimeParser implements Parser
      */
     public function setRuntimeConfiguration(RuntimeConfiguration $configuration)
     {
+        $this->runtimeConfiguration = $configuration;
         GlobalRuntimeState::$allowPhpInContent = $configuration->allowPhpInUserContent;
         GlobalRuntimeState::$allowMethodsInContent = $configuration->allowMethodsInUserContent;
         GlobalRuntimeState::$throwErrorOnAccessViolation = $configuration->throwErrorOnAccessViolation;
@@ -150,15 +169,8 @@ class RuntimeParser implements Parser
         GlobalRuntimeState::$bannedContentModifierPaths = $configuration->guardedContentModifiers;
         GlobalRuntimeState::$allowedContentModifierPaths = $configuration->allowedContentModifiers;
 
+        $this->documentParser->annotateHtmlContext($configuration->annotateHtmlContext);
         $this->nodeProcessor->setRuntimeConfiguration($configuration);
-
-        foreach ($configuration->getPreparsers() as $preparser) {
-            $this->preparse($preparser);
-        }
-
-        foreach ($configuration->getVisitors() as $visitor) {
-            $this->documentParser->addVisitor($visitor);
-        }
 
         return $this;
     }
@@ -170,6 +182,7 @@ class RuntimeParser implements Parser
      */
     public function resetRuntimeConfiguration()
     {
+        $this->runtimeConfiguration = null;
         $this->nodeProcessor->resetRuntimeConfiguration();
 
         return $this;
@@ -204,11 +217,85 @@ class RuntimeParser implements Parser
     {
         $value = $text;
 
-        foreach ($this->preParsers as $preParser) {
+        foreach ($this->mergeConfigurationCallbacks($this->preParsers, 'getPreparsers') as $preParser) {
             $value = call_user_func($preParser, $value);
         }
 
         return $value;
+    }
+
+    /**
+     * Combines parser-local callbacks with the runtime configuration's,
+     * running each distinct callback once even when registered on both.
+     *
+     * @param  callable[]  $local
+     * @param  string  $accessor
+     * @return callable[]
+     */
+    private function mergeConfigurationCallbacks(array $local, $accessor)
+    {
+        if ($this->runtimeConfiguration === null) {
+            return $local;
+        }
+
+        $callbacks = $this->runtimeConfiguration->{$accessor}();
+
+        foreach ($local as $callback) {
+            if (! in_array($callback, $callbacks, true)) {
+                $callbacks[] = $callback;
+            }
+        }
+
+        return $callbacks;
+    }
+
+    /**
+     * Execute callbacks against the authored template before components are
+     * compiled into Antlers proxy tags.
+     *
+     * @param  string  $text
+     * @return string
+     */
+    protected function runBeforeComponentCompilationCallbacks($text)
+    {
+        $value = $text;
+        $callbacks = $this->mergeConfigurationCallbacks(
+            $this->beforeComponentCompilationCallbacks,
+            'getBeforeComponentCompilationCallbacks'
+        );
+
+        foreach ($callbacks as $callback) {
+            $value = call_user_func($callback, $value);
+        }
+
+        return $value;
+    }
+
+    /**
+     * Keep parse-time visitors in sync with the live runtime configuration.
+     */
+    protected function syncRuntimeVisitors()
+    {
+        if ($this->runtimeConfiguration === null) {
+            return;
+        }
+
+        $visitors = $this->runtimeConfiguration->getVisitors();
+
+        // Visitors dropped from the configuration are withdrawn from the
+        // document parser too; visitors added directly to the parser are left
+        // alone because this only reconciles what it previously synced.
+        foreach ($this->syncedVisitors as $visitor) {
+            if (! in_array($visitor, $visitors, true)) {
+                $this->documentParser->removeVisitor($visitor);
+            }
+        }
+
+        foreach ($visitors as $visitor) {
+            $this->documentParser->addVisitor($visitor);
+        }
+
+        $this->syncedVisitors = $visitors;
     }
 
     /**
@@ -262,6 +349,18 @@ class RuntimeParser implements Parser
     public function preparse(callable $preparser)
     {
         $this->preParsers[] = $preparser;
+    }
+
+    /**
+     * Add a source transformer that runs before component compilation.
+     *
+     * @return $this
+     */
+    public function beforeComponentCompilation(callable $callback)
+    {
+        $this->beforeComponentCompilationCallbacks[] = $callback;
+
+        return $this;
     }
 
     protected function canPossiblyParseAntlers($text)
@@ -341,6 +440,7 @@ class RuntimeParser implements Parser
      */
     protected function renderText($text, $data = [])
     {
+        $text = $this->runBeforeComponentCompilationCallbacks($text);
         $text = $this->componentCompiler->compile($text);
 
         $this->parseStack += 1;
@@ -364,6 +464,7 @@ class RuntimeParser implements Parser
         try {
             $parseText = $this->sanitizePhp($text);
             $cacheSlug = md5($parseText);
+            $this->syncRuntimeVisitors();
 
             if (! array_key_exists($cacheSlug, self::$standardRenderNodeCache) || ! $this->shouldCacheRenderNodes($text)) {
                 $this->documentParser->setIsVirtual($this->view == '');
@@ -393,9 +494,14 @@ class RuntimeParser implements Parser
             $this->nodeProcessor->cascade($this->cascade);
 
             $this->nodeProcessor->mergeRuntimeAssignments(GlobalRuntimeState::$tracedRuntimeAssignments);
-            $bufferContent = $this->nodeProcessor->render($renderNodes);
 
-            $this->nodeProcessor->triggerRenderComplete();
+            $this->nodeProcessor->triggerRenderStart();
+
+            try {
+                $bufferContent = $this->nodeProcessor->render($renderNodes);
+            } finally {
+                $this->nodeProcessor->triggerRenderComplete();
+            }
         } catch (AntlersException $antlersException) {
             if ($this->isIgnitionInstalled()) {
                 throw $this->buildAntlersExceptionError($antlersException, $text, $data);
@@ -694,6 +800,12 @@ INFO;
             $this->nodeProcessor->cloneProcessor(),
             $this->antlersLexer, $this->antlersParser
         ))->allowPhp($this->allowPhp);
+
+        $parser->runtimeConfiguration = $this->runtimeConfiguration;
+
+        foreach ($this->beforeComponentCompilationCallbacks as $callback) {
+            $parser->beforeComponentCompilation($callback);
+        }
 
         foreach ($this->preParsers as $preParser) {
             $parser->preparse($preParser);

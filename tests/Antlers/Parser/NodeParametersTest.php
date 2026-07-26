@@ -127,6 +127,44 @@ EOT;
         $this->assertParameterNameValue($node->parameters[1], 'param', 'value-two');
     }
 
+    public function test_parameters_can_be_queried_by_name_and_report_static_values()
+    {
+        /** @var AntlersNode $node */
+        $node = $this->parseNodes('{{ identifier static="value" :dynamic="variable" }}')[0];
+
+        $this->assertSame('value', $node->parameter('STATIC')->value);
+        $this->assertTrue($node->parameter('static')->isStatic());
+        $this->assertFalse($node->parameter('dynamic')->isStatic());
+        $this->assertNull($node->parameter('missing'));
+    }
+
+    public function test_static_parameter_values_can_be_read_with_a_default()
+    {
+        /** @var AntlersNode $node */
+        $node = $this->parseNodes('{{ identifier static="value" :dynamic="variable" }}')[0];
+
+        $this->assertSame('value', $node->staticParameterValue('STATIC'));
+        $this->assertSame('fallback', $node->staticParameterValue('missing', 'fallback'));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('The [dynamic] Antlers parameter must be static.');
+
+        $node->staticParameterValue('dynamic');
+    }
+
+    public function test_interpolated_parameter_values_are_not_static()
+    {
+        /** @var AntlersNode $node */
+        $node = $this->parseNodes('{{ identifier value="{{ variable }}" }}')[0];
+
+        $this->assertFalse($node->parameter('value')->isStatic());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('The [value] Antlers parameter must be static.');
+
+        $node->staticParameterValue('value');
+    }
+
     public function test_variable_references_are_parsed()
     {
         /** @var AntlersNode $node */

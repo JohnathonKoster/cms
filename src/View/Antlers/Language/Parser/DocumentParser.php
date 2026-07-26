@@ -3,6 +3,7 @@
 namespace Statamic\View\Antlers\Language\Parser;
 
 use Statamic\Support\Str;
+use Statamic\View\Antlers\Language\Analyzers\Html\Document;
 use Statamic\View\Antlers\Language\Analyzers\RecursiveParentAnalyzer;
 use Statamic\View\Antlers\Language\Analyzers\TagPairAnalyzer;
 use Statamic\View\Antlers\Language\Errors\AntlersErrorCodes;
@@ -21,6 +22,7 @@ use Statamic\View\Antlers\Language\Nodes\VariableNode;
 use Statamic\View\Antlers\Language\Runtime\GlobalRuntimeState;
 use Statamic\View\Antlers\Language\Runtime\Tracing\NodeVisitorContract;
 use Statamic\View\Antlers\Language\Utilities\StringUtilities;
+use Statamic\View\Instrumentation\Antlers\ContextScanner;
 
 class DocumentParser
 {
@@ -87,6 +89,34 @@ class DocumentParser
     private $nodes = [];
     private $renderNodes = [];
 
+    /** @var Document|null */
+    private $htmlDocument = null;
+
+    /**
+     * Identifies the current parse. Instances are reused across renders, so
+     * nodes record the generation they belong to and lazy analysis refuses to
+     * run against a document the parser has already moved on from.
+     *
+     * @var int
+     */
+    private $generation = 0;
+
+    /**
+     * Whether the ContextScanner has already annotated the current nodes.
+     *
+     * @var bool
+     */
+    private $htmlContextScanned = false;
+
+    /**
+     * Whether parsed nodes are annotated with their HTML context. Set from
+     * the runtime configuration; the ContextScanner::$enabled static remains
+     * honored for direct DocumentParser use.
+     *
+     * @var bool
+     */
+    private $annotateHtmlContext = false;
+
     private $isInterpolatedParser = false;
 
     private $inputLen = 0;
@@ -95,6 +125,8 @@ class DocumentParser
     private $interpolationEndOffsets = [];
     private $seedStartLine = 1;
     private $seedStartChar = 1;
+
+    private $inheritRuntimeLineSeed = true;
     private $lastAntlersEndIndex = -1;
     private $seedOffset = 0;
 
@@ -145,6 +177,57 @@ class DocumentParser
         return $this;
     }
 
+    /** @internal */
+    public function inheritRuntimeLineSeed($inherit = true)
+    {
+        $this->inheritRuntimeLineSeed = $inherit;
+
+        return $this;
+    }
+
+    /**
+     * Enables or disables automatic HTML context annotation for parsed nodes.
+     *
+     * @param  bool  $annotate
+     * @return $this
+     */
+    public function annotateHtmlContext($annotate = true)
+    {
+        $this->annotateHtmlContext = $annotate;
+
+        return $this;
+    }
+
+    /**
+     * Identifies the parse the current nodes belong to. Incremented whenever
+     * the parser is reset for new source.
+     *
+     * @return int
+     */
+    public function generation()
+    {
+        return $this->generation;
+    }
+
+    /**
+     * Runs HTML context annotation over the current nodes, at most once per
+     * parse.
+     *
+     * @internal
+     *
+     * @return void
+     */
+    public function scanHtmlContext()
+    {
+        if ($this->htmlContextScanned) {
+            return;
+        }
+
+        $this->htmlContextScanned = true;
+
+        (new ContextScanner)->annotate($this->nodes);
+    }
+
     public function setSeedStartChar($startChar)
     {
         $this->seedStartChar = $startChar;
@@ -176,6 +259,21 @@ class DocumentParser
     public function getParsedContent()
     {
         return $this->content;
+    }
+
+    /**
+     * Lazily build the source-preserving HTML sidecar graph.
+     *
+     * Ordinary Antlers parsing pays only for this nullable field; tokenizing
+     * and tree construction happen on the first explicit graph access.
+     */
+    public function html()
+    {
+        if ($this->htmlDocument === null) {
+            $this->htmlDocument = Document::fromParser($this);
+        }
+
+        return $this->htmlDocument;
     }
 
     private function peek($count)
@@ -745,6 +843,12 @@ class DocumentParser
                     }
 
                     $node->processedInterpolationRegions[$varName] = $parseResults;
+
+                    foreach ($parseResults as $interpolationNode) {
+                        if ($interpolationNode instanceof AntlersNode) {
+                            $interpolationNode->withHtmlContextOwner($node);
+                        }
+                    }
                 }
                 $node->hasProcessedInterpolationRegions = true;
             }
@@ -780,6 +884,11 @@ class DocumentParser
         }
 
         foreach ($this->nodes as $node) {
+            // Nodes outlive the parser's current source through the runtime's
+            // node cache; the generation lets later analysis tell whether this
+            // parser still describes the document the node came from.
+            $node->parserGeneration = $this->generation;
+
             if ($node instanceof AntlersNode) {
                 $node->isInterpolationNode = $this->isInterpolatedParser;
             }
@@ -805,6 +914,10 @@ class DocumentParser
             }
         }
 
+        if ($this->annotateHtmlContext || ContextScanner::$enabled) {
+            $this->scanHtmlContext();
+        }
+
         if (! empty($this->visitors)) {
             foreach ($this->visitors as $visitor) {
                 foreach ($this->renderNodes as $node) {
@@ -823,7 +936,26 @@ class DocumentParser
      */
     public function addVisitor(NodeVisitorContract $visitor)
     {
+        foreach ($this->visitors as $registered) {
+            if ($registered === $visitor) {
+                return;
+            }
+        }
+
         $this->visitors[] = $visitor;
+    }
+
+    /**
+     * Removes a registered NodeVisitorContract instance.
+     *
+     * @param  NodeVisitorContract  $visitor  The visitor.
+     */
+    public function removeVisitor(NodeVisitorContract $visitor)
+    {
+        $this->visitors = array_values(array_filter(
+            $this->visitors,
+            fn ($registered) => $registered !== $visitor
+        ));
     }
 
     /**
@@ -1565,6 +1697,9 @@ class DocumentParser
 
     public function resetState()
     {
+        $this->htmlDocument = null;
+        $this->htmlContextScanned = false;
+        $this->generation++;
         $this->charLen = 0;
         $this->antlersStartIndex = [];
         $this->antlersStartPositionIndex = [];
@@ -1573,7 +1708,7 @@ class DocumentParser
         $this->renderNodes = [];
         $this->nodes = [];
 
-        if (! empty(GlobalRuntimeState::$globalTagEnterStack)) {
+        if ($this->inheritRuntimeLineSeed && ! empty(GlobalRuntimeState::$globalTagEnterStack)) {
             /** @var AntlersNode $lastTagNode */
             $lastTagNode = GlobalRuntimeState::$globalTagEnterStack[count(GlobalRuntimeState::$globalTagEnterStack) - 1];
 

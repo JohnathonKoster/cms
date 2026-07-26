@@ -44,6 +44,7 @@
         "algolia/algoliasearch-client-php": "^4.32",
         "doctrine/dbal": "^3.6",
         "fakerphp/faker": "~1.10",
+        "fortephp/forte": "^1.0.4",
         "google/cloud-translate": "^1.6",
         "larastan/larastan": "^3.10",
         "laravel/pao": "^1.1",
@@ -59,7 +60,8 @@
         "algolia/algoliasearch-client-php": "<4.32"
     },
     "suggest": {
-        "algolia/algoliasearch-client-php": "Required to use Algolia search driver (^4.32)"
+        "algolia/algoliasearch-client-php": "Required to use Algolia search driver (^4.32)",
+        "fortephp/forte": "Required to instrument Blade templates with HTML-aware markers (^1.0.4)"
     },
     "config": {
         "optimize-autoloader": true,

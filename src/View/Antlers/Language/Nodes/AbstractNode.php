@@ -48,6 +48,24 @@ abstract class AbstractNode
      */
     public $originalAbstractNode = null;
 
+    /**
+     * The node's surrounding HTML context, populated by the
+     * ContextScanner when HTML context analysis is enabled.
+     *
+     * @var \Statamic\View\Instrumentation\HtmlContext|null
+     */
+    public $htmlContext = null;
+
+    /**
+     * The parse this node was produced by. DocumentParser instances are
+     * reused across renders while nodes persist in the runtime's node cache,
+     * so lazy HTML analysis compares this against the parser's current
+     * generation before resolving anything.
+     *
+     * @var int|null
+     */
+    public $parserGeneration = null;
+
     public $isVirtual = false;
 
     public function __construct()

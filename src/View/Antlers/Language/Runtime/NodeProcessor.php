@@ -375,6 +375,16 @@ class NodeProcessor
     }
 
     /**
+     * Marks the beginning of a runtime trace render scope.
+     */
+    public function triggerRenderStart()
+    {
+        if ($this->isTracingEnabled()) {
+            $this->runtimeConfiguration->traceManager->traceRenderStart();
+        }
+    }
+
+    /**
      * Triggers a runtime trace complete interrupt.
      */
     public function triggerRenderComplete()
@@ -1196,7 +1206,7 @@ class NodeProcessor
                 $this->activeNode = $node;
 
                 if ($this->isTracingEnabled()) {
-                    $this->runtimeConfiguration->traceManager->traceOnEnter($node);
+                    $this->runtimeConfiguration->traceManager->traceOnEnter($node, $this);
                 }
 
                 if ($node instanceof AntlersNode) {

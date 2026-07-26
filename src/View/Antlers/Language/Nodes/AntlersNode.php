@@ -5,6 +5,7 @@ namespace Statamic\View\Antlers\Language\Nodes;
 use Illuminate\Support\Str;
 use Statamic\Facades\Antlers;
 use Statamic\Tags\TagNotFoundException;
+use Statamic\View\Antlers\Language\Analyzers\Html\AntlersNode as HtmlAntlersNode;
 use Statamic\View\Antlers\Language\Exceptions\RuntimeException;
 use Statamic\View\Antlers\Language\Exceptions\SyntaxErrorException;
 use Statamic\View\Antlers\Language\Nodes\Parameters\ParameterNode;
@@ -39,6 +40,17 @@ class AntlersNode extends AbstractNode
      */
     protected $parser = null;
 
+    /** @var HtmlAntlersNode|null */
+    protected $htmlGraphNode = null;
+
+    /**
+     * Nested interpolation tags occupy the outer Antlers region's HTML
+     * position rather than an independent source location.
+     *
+     * @var AntlersNode|null
+     */
+    protected $htmlContextOwner = null;
+
     /**
      * The parsed runtime content.
      *
@@ -66,6 +78,107 @@ class AntlersNode extends AbstractNode
     public function getParser()
     {
         return $this->parser;
+    }
+
+    /**
+     * Return this Antlers region's node in the lazy HTML sidecar graph.
+     *
+     * @return HtmlAntlersNode|null
+     */
+    public function htmlNode()
+    {
+        if ($this->htmlContextOwner !== null) {
+            return $this->htmlContextOwner->htmlNode();
+        }
+
+        if ($this->htmlGraphNode === null && $this->describesCurrentParse()) {
+            $this->htmlGraphNode = $this->parser->html()->node($this);
+        }
+
+        return $this->htmlGraphNode;
+    }
+
+    /**
+     * Whether this node's parser still holds the document the node came from.
+     *
+     * A DocumentParser is reused for every render while nodes survive in the
+     * runtime's node cache, so lazily analyzing through a parser that has
+     * moved on would describe unrelated source.
+     *
+     * @return bool
+     */
+    protected function describesCurrentParse()
+    {
+        return $this->parser !== null
+            && $this->parserGeneration !== null
+            && $this->parserGeneration === $this->parser->generation();
+    }
+
+    /** @internal */
+    public function withHtmlContextOwner(AntlersNode $owner)
+    {
+        $this->htmlContextOwner = $owner;
+
+        foreach ($this->processedInterpolationRegions as $nodes) {
+            foreach ($nodes as $node) {
+                if ($node instanceof AntlersNode) {
+                    $node->withHtmlContextOwner($owner);
+                }
+            }
+        }
+
+        return $this;
+    }
+
+    public function withHtmlNode(HtmlAntlersNode $node)
+    {
+        $this->htmlGraphNode = $node;
+
+        return $this;
+    }
+
+    public function parentElement()
+    {
+        $node = $this->htmlNode();
+
+        return $node !== null ? $node->parentElement() : null;
+    }
+
+    /**
+     * Lazily resolve this region's surrounding HTML parser context.
+     *
+     * Nested interpolation tags delegate to their outer Antlers region: they
+     * execute at that source location and therefore have the same HTML
+     * element, attribute, and content context.
+     */
+    public function htmlContext()
+    {
+        if ($this->htmlContextOwner !== null) {
+            return $this->htmlContextOwner->htmlContext();
+        }
+
+        // scanHtmlContext() annotates the whole document once per parse, so a
+        // node that legitimately has no context does not re-trigger the scan
+        // on every call.
+        if ($this->htmlContext === null && $this->describesCurrentParse()) {
+            $this->parser->scanHtmlContext();
+        }
+
+        return $this->htmlContext;
+    }
+
+    public function previousHtmlSibling()
+    {
+        $node = $this->htmlNode();
+
+        return $node !== null ? $node->previousSibling() : null;
+    }
+
+    public function nextHtmlSibling()
+    {
+        $node = $this->htmlNode();
+
+        return $node !== null ? $node->nextSibling() : null;
     }
 
     /**
@@ -314,6 +427,9 @@ class AntlersNode extends AbstractNode
         $instance->endPosition = $this->endPosition;
         $instance->interpolationRegions = $this->interpolationRegions;
         $instance->processedInterpolationRegions = $this->processedInterpolationRegions;
+        $instance->htmlContextOwner = $this->htmlContextOwner;
+        $instance->htmlContext = $this->htmlContext;
+        $instance->parserGeneration = $this->parserGeneration;
 
         return $instance;
     }
@@ -606,6 +722,37 @@ class AntlersNode extends AbstractNode
         }
 
         return true;
+    }
+
+    /**
+     * @return ParameterNode|null
+     */
+    public function parameter($name)
+    {
+        foreach ($this->parameters as $parameter) {
+            if (strcasecmp($parameter->name, $name) === 0) {
+                return $parameter;
+            }
+        }
+
+        return null;
+    }
+
+    public function staticParameterValue($name, $default = null)
+    {
+        $parameter = $this->parameter($name);
+
+        if ($parameter === null) {
+            return $default;
+        }
+
+        if (! $parameter->isStatic()) {
+            throw new \InvalidArgumentException(
+                sprintf('The [%s] Antlers parameter must be static.', $name)
+            );
+        }
+
+        return $parameter->value;
     }
 
     public function getNodeDocumentText()

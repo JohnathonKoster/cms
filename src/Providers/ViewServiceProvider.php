@@ -25,6 +25,8 @@ use Statamic\View\Blade\StatamicTagCompiler;
 use Statamic\View\Cascade;
 use Statamic\View\Debugbar\AntlersProfiler\PerformanceCollector;
 use Statamic\View\Debugbar\AntlersProfiler\PerformanceTracer;
+use Statamic\View\Instrumentation\Antlers\ContextScanner;
+use Statamic\View\Instrumentation\InstrumentationManager;
 use Statamic\View\Interop\Stacks;
 
 class ViewServiceProvider extends ServiceProvider
@@ -82,86 +84,132 @@ class ViewServiceProvider extends ServiceProvider
             return new PerformanceTracer();
         });
 
+        $this->app->singleton(InstrumentationManager::class);
+
+        $this->app->singleton(RuntimeConfiguration::class, function ($app) {
+            $runtimeConfig = new RuntimeConfiguration();
+
+            $this->configureRuntimeConfiguration($runtimeConfig, $app);
+
+            $app->make(InstrumentationManager::class)->applyTo($runtimeConfig);
+
+            return $runtimeConfig;
+        });
+
         $this->app->bind(ParserContract::class, function ($app) {
             /** @var RuntimeParser $parser */
             $parser = $app->make(RuntimeParser::class)->cascade($app[Cascade::class]);
-            $runtimeConfig = new RuntimeConfiguration();
 
-            $isTracingOn = config('statamic.antlers.tracing', false);
-            $runtimeConfig->fatalErrorOnUnpairedLoop = config('statamic.antlers.fatalErrorOnUnpairedLoop', false);
-            $runtimeConfig->fatalErrorOnStringObject = config('statamic.antlers.fatalErrorOnPrintObjects', false);
-            $runtimeConfig->throwErrorOnAccessViolation = config('statamic.antlers.errorOnAccessViolation', false);
-            $runtimeConfig->guardedVariablePatterns = config('statamic.antlers.guardedVariables', [
-                'config.app.key',
-            ]);
-            $runtimeConfig->guardedTagPatterns = config('statamic.antlers.guardedTags', []);
-            $runtimeConfig->guardedModifiers = config('statamic.antlers.guardedModifiers', []);
+            $runtimeConfig = $app->make(RuntimeConfiguration::class);
 
-            $runtimeConfig->guardedContentVariablePatterns = config('statamic.antlers.guardedContentVariables', []);
-            $runtimeConfig->guardedContentTagPatterns = config('statamic.antlers.guardedContentTags', []);
-            $runtimeConfig->guardedContentModifiers = config('statamic.antlers.guardedContentModifiers', []);
-            $runtimeConfig->allowedContentTagPatterns = $this->mergeContentAllowlist(
-                config('statamic.antlers.allowedContentTags'),
-                $this->defaultAllowedContentTagPatterns($app)
-            );
-
-            $runtimeConfig->allowedContentModifiers = $this->mergeContentAllowlist(
-                config('statamic.antlers.allowedContentModifiers'),
-                $this->defaultAllowedContentModifiers($app)
-            );
-            $runtimeConfig->allowPhpInUserContent = config('statamic.antlers.allowPhpInContent', false);
-            $runtimeConfig->allowMethodsInUserContent = config('statamic.antlers.allowMethodsInContent', false);
-
-            $runtimeConfig->guardedContentVariablePatterns = array_merge(
-                $runtimeConfig->guardedVariablePatterns,
-                $runtimeConfig->guardedContentVariablePatterns
-            );
-
-            $runtimeConfig->guardedContentTagPatterns = array_merge(
-                $runtimeConfig->guardedTagPatterns,
-                $runtimeConfig->guardedContentTagPatterns
-            );
-
-            $runtimeConfig->guardedContentModifiers = array_merge(
-                $runtimeConfig->guardedModifiers,
-                $runtimeConfig->guardedContentModifiers
-            );
-
-            if ($isTracingOn) {
-                $traceManager = new TraceManager();
-                $tracers = config('statamic.antlers.tracers', []);
-
-                foreach ($tracers as $abstract) {
-                    $traceManager->registerTracer($app->make($abstract));
-                }
-
-                $runtimeConfig->traceManager = $traceManager;
-                $runtimeConfig->isTracingEnabled = true;
-            }
-
-            if (GlobalDebugManager::isDebugSessionActive()) {
-                if (! $isTracingOn) {
-                    $runtimeConfig->traceManager = new TraceManager();
-                    $runtimeConfig->isTracingEnabled = true;
-                }
-
-                $runtimeConfig->traceManager->registerTracer(GlobalDebugManager::getTimingsTracer());
-            }
-
-            if ($this->profilerEnabled()) {
-                if (! $isTracingOn) {
-                    $runtimeConfig->traceManager = new TraceManager();
-                    $runtimeConfig->isTracingEnabled = true;
-                }
-
-                $runtimeConfig->traceManager->registerTracer(app(PerformanceTracer::class));
-            }
+            // The instance is shared so registrations through the Instrument
+            // facade reach every parser; its values are re-read here so
+            // configuration changed after boot still applies.
+            $this->configureRuntimeConfiguration($runtimeConfig, $app);
 
             $parser->isolateRuntimes(GlobalRuntimeState::$requiresRuntimeIsolation)
                 ->setRuntimeConfiguration($runtimeConfig);
 
             return $parser;
         });
+    }
+
+    /**
+     * Applies the statamic.antlers.* configuration to a runtime configuration.
+     *
+     * Runs on every parser resolution, so it must be idempotent: it only ever
+     * turns tracing on, never replaces an existing trace manager, and leans on
+     * the instrumentation manager to hand back stable instances for
+     * configured pieces so repeat application cannot duplicate them.
+     */
+    private function configureRuntimeConfiguration(RuntimeConfiguration $runtimeConfig, Application $app): void
+    {
+        $instrumentationManager = $app->make(InstrumentationManager::class);
+
+        $runtimeConfig->annotateHtmlContext = (bool) config('statamic.antlers.htmlContext', false);
+        ContextScanner::$enabled = $runtimeConfig->annotateHtmlContext;
+
+        $instrumentation = config('statamic.antlers.instrumentation', []);
+
+        if (is_array($instrumentation) && ($instrumentation['enabled'] ?? false)) {
+            $instrumentationManager->register(
+                $instrumentationManager->configuredHtmlInstrumentation($instrumentation),
+                [InstrumentationManager::ENGINE_ANTLERS]
+            );
+        }
+
+        $isTracingOn = config('statamic.antlers.tracing', false);
+        $runtimeConfig->fatalErrorOnUnpairedLoop = config('statamic.antlers.fatalErrorOnUnpairedLoop', false);
+        $runtimeConfig->fatalErrorOnStringObject = config('statamic.antlers.fatalErrorOnPrintObjects', false);
+        $runtimeConfig->throwErrorOnAccessViolation = config('statamic.antlers.errorOnAccessViolation', false);
+        $runtimeConfig->guardedVariablePatterns = config('statamic.antlers.guardedVariables', [
+            'config.app.key',
+        ]);
+        $runtimeConfig->guardedTagPatterns = config('statamic.antlers.guardedTags', []);
+        $runtimeConfig->guardedModifiers = config('statamic.antlers.guardedModifiers', []);
+
+        $runtimeConfig->guardedContentVariablePatterns = config('statamic.antlers.guardedContentVariables', []);
+        $runtimeConfig->guardedContentTagPatterns = config('statamic.antlers.guardedContentTags', []);
+        $runtimeConfig->guardedContentModifiers = config('statamic.antlers.guardedContentModifiers', []);
+        $runtimeConfig->allowedContentTagPatterns = $this->mergeContentAllowlist(
+            config('statamic.antlers.allowedContentTags'),
+            $this->defaultAllowedContentTagPatterns($app)
+        );
+
+        $runtimeConfig->allowedContentModifiers = $this->mergeContentAllowlist(
+            config('statamic.antlers.allowedContentModifiers'),
+            $this->defaultAllowedContentModifiers($app)
+        );
+        $runtimeConfig->allowPhpInUserContent = config('statamic.antlers.allowPhpInContent', false);
+        $runtimeConfig->allowMethodsInUserContent = config('statamic.antlers.allowMethodsInContent', false);
+
+        $runtimeConfig->guardedContentVariablePatterns = array_merge(
+            $runtimeConfig->guardedVariablePatterns,
+            $runtimeConfig->guardedContentVariablePatterns
+        );
+
+        $runtimeConfig->guardedContentTagPatterns = array_merge(
+            $runtimeConfig->guardedTagPatterns,
+            $runtimeConfig->guardedContentTagPatterns
+        );
+
+        $runtimeConfig->guardedContentModifiers = array_merge(
+            $runtimeConfig->guardedModifiers,
+            $runtimeConfig->guardedContentModifiers
+        );
+
+        if ($isTracingOn) {
+            $this->enableTracing($runtimeConfig);
+
+            foreach (config('statamic.antlers.tracers', []) as $abstract) {
+                $instrumentationManager->register($abstract, [InstrumentationManager::ENGINE_ANTLERS]);
+            }
+        }
+
+        if (GlobalDebugManager::isDebugSessionActive()) {
+            $this->enableTracing($runtimeConfig);
+
+            $runtimeConfig->traceManager->registerTracer(GlobalDebugManager::getTimingsTracer());
+        }
+
+        if ($this->profilerEnabled()) {
+            $this->enableTracing($runtimeConfig);
+
+            $runtimeConfig->traceManager->registerTracer($app->make(PerformanceTracer::class));
+        }
+    }
+
+    /**
+     * Turns tracing on without disturbing tracers already registered against
+     * an existing trace manager.
+     */
+    private function enableTracing(RuntimeConfiguration $runtimeConfig): void
+    {
+        if ($runtimeConfig->traceManager === null) {
+            $runtimeConfig->traceManager = new TraceManager();
+        }
+
+        $runtimeConfig->isTracingEnabled = true;
     }
 
     private function getAppTagPatternsForContentAllowlist(Application $app): array
@@ -426,6 +474,12 @@ PHP;
         ViewFactory::addNamespace('compiled__views', storage_path('framework/views'));
 
         $this->registerBladeDirectives();
+
+        // This preparation seam runs before Laravel compiles native Blade
+        // components, preserving authored component boundaries for analysis.
+        Blade::prepareStringsForCompilationUsing(function ($content) {
+            return $this->app->make(InstrumentationManager::class)->preprocessBlade($content);
+        });
 
         Blade::precompiler(function ($content) {
             return (new StatamicTagCompiler())->compile($content);

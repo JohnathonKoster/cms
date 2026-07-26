@@ -10,6 +10,9 @@ use Statamic\Fields\Value;
 use Statamic\Tags\Structure;
 use Statamic\Tags\Tags;
 use Statamic\View\Antlers\Language\Nodes\AntlersNode;
+use Statamic\View\Instrumentation\InstrumentationManager;
+use Statamic\View\Instrumentation\Span;
+use Statamic\View\Instrumentation\TracerContract;
 
 class BladeTagHost
 {
@@ -24,9 +27,100 @@ class BladeTagHost
     protected ?Tags $tag = null;
     protected array $protectedVariables = ['page'];
 
+    /**
+     * Standalone fallback when no application instrumentation manager exists.
+     *
+     * @var TracerContract[]
+     */
+    protected static array $fallbackTracers = [];
+
     public function __construct(array $context)
     {
         $this->context = $context;
+    }
+
+    /**
+     * Register the sole tracer notified around every Blade tag execution
+     * (replacing any previously registered tracers), or clear them all with
+     * null. Opt-in seam for profiling tools; none are registered by default.
+     */
+    public static function traceUsing(?TracerContract $tracer): void
+    {
+        $manager = static::instrumentationManager();
+
+        if ($manager !== null) {
+            static::$fallbackTracers = [];
+            $manager->traceBladeUsing($tracer);
+
+            return;
+        }
+
+        static::$fallbackTracers = $tracer === null ? [] : [$tracer];
+    }
+
+    /**
+     * Register an additional tracer alongside any already registered.
+     */
+    public static function addTracer(TracerContract $tracer): void
+    {
+        $manager = static::instrumentationManager();
+
+        if ($manager !== null) {
+            $manager->addBladeTracer($tracer);
+
+            return;
+        }
+
+        foreach (static::$fallbackTracers as $registered) {
+            if ($registered === $tracer) {
+                return;
+            }
+        }
+
+        static::$fallbackTracers[] = $tracer;
+    }
+
+    /**
+     * @return TracerContract[]
+     */
+    protected static function registeredTracers(): array
+    {
+        $manager = static::instrumentationManager();
+
+        if ($manager === null) {
+            return static::$fallbackTracers;
+        }
+
+        // Tracers registered before the manager was bound would otherwise be
+        // stranded on the static, so hand them over the first time it exists.
+        if (static::$fallbackTracers !== []) {
+            foreach (static::$fallbackTracers as $tracer) {
+                $manager->addBladeTracer($tracer);
+            }
+
+            static::$fallbackTracers = [];
+        }
+
+        return $manager->bladeTracers();
+    }
+
+    /**
+     * The application's instrumentation manager, or null when running without
+     * a container that has one bound.
+     */
+    protected static function instrumentationManager(): ?InstrumentationManager
+    {
+        if (! function_exists('app')) {
+            return null;
+        }
+
+        $app = app();
+
+        if ($app === null || ! $app->bound(InstrumentationManager::class)) {
+            return null;
+        }
+
+        return $app->make(InstrumentationManager::class);
     }
 
     public function setParams(array $params): static
@@ -105,7 +199,33 @@ class BladeTagHost
             $this->tag->isPair = true;
         }
 
-        $this->originalValue = $this->tag->{$method}();
+        $tracers = static::registeredTracers();
+        $span = null;
+        $handles = [];
+
+        if ($tracers !== []) {
+            $span = Span::bladeTag($this->tag, $method);
+
+            // Pair each handle with its tracer so the exit loop cannot be
+            // thrown off by a registration made mid-call.
+            foreach ($tracers as $tracer) {
+                $handles[] = [$tracer, $tracer->onEnter($span)];
+            }
+        }
+
+        $this->originalValue = null;
+
+        try {
+            $this->originalValue = $this->tag->{$method}();
+        } finally {
+            // Exit in reverse registration order; output is null when the
+            // tag threw.
+            for ($index = count($handles) - 1; $index >= 0; $index--) {
+                [$tracer, $handle] = $handles[$index];
+
+                $tracer->onExit($span, $handle, $this->originalValue);
+            }
+        }
 
         return $this->tagValue = self::adjustBladeValue($this->originalValue);
     }

@@ -4,8 +4,10 @@ namespace Statamic\View\Antlers;
 
 use Closure;
 use Statamic\Contracts\View\Antlers\Parser;
+use Statamic\View\Antlers\Language\Analyzers\Html\Document;
 use Statamic\View\Antlers\Language\Parser\IdentifierFinder;
 use Statamic\View\Antlers\Language\Runtime\GlobalRuntimeState;
+use Statamic\View\Instrumentation\HtmlInstrumentation;
 
 class Antlers
 {
@@ -58,5 +60,20 @@ class Antlers
     public function identifiers(string $content): array
     {
         return (new IdentifierFinder)->getIdentifiers($content);
+    }
+
+    /**
+     * Add safe diagnostic HTML markup to an Antlers template before it is
+     * rendered. Supply a configured instrumenter to control markers and
+     * attribute layers.
+     */
+    public function instrument(string $template, ?HtmlInstrumentation $instrumentation = null): string
+    {
+        return ($instrumentation ?: HtmlInstrumentation::make())->instrumentAntlers($template);
+    }
+
+    public function html(string $template): Document
+    {
+        return Document::parse($template);
     }
 }

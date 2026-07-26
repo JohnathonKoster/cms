@@ -8,6 +8,14 @@ use Statamic\View\Antlers\Language\Runtime\Tracing\TraceManager;
 class RuntimeConfiguration
 {
     /**
+     * A list of callbacks that transform authored template source before
+     * Statamic and Blade components are compiled.
+     *
+     * @var callable[]
+     */
+    protected $beforeComponentCompilationCallbacks = [];
+
+    /**
      * A list of all Antlers preparser callbacks.
      *
      * @var callable[]
@@ -134,13 +142,74 @@ class RuntimeConfiguration
     public $allowMethodsInUserContent = false;
 
     /**
+     * Whether parsed nodes are eagerly annotated with their surrounding HTML
+     * context. Nodes can always resolve their context lazily; this makes the
+     * annotation happen at parse time instead.
+     *
+     * @var bool
+     */
+    public $annotateHtmlContext = false;
+
+    /**
+     * Register a source transformer that runs before component compilation.
+     *
+     * @return $this
+     */
+    public function beforeComponentCompilation(callable $callable)
+    {
+        $this->beforeComponentCompilationCallbacks[] = $callable;
+
+        return $this;
+    }
+
+    /**
+     * Get the source transformers that run before component compilation.
+     *
+     * @return callable[]
+     */
+    public function getBeforeComponentCompilationCallbacks()
+    {
+        return $this->beforeComponentCompilationCallbacks;
+    }
+
+    /**
      * Registers a new Antlers preparser callback.
      *
      * @param  callable  $callable  The preparser callback.
      */
     public function preparse(callable $callable)
     {
+        if (in_array($callable, $this->preparsers, true)) {
+            return;
+        }
+
         $this->preparsers[] = $callable;
+    }
+
+    /**
+     * Removes a previously registered Antlers preparser callback.
+     *
+     * @return void
+     */
+    public function removePreparser(callable $callable)
+    {
+        $this->preparsers = array_values(array_filter(
+            $this->preparsers,
+            fn ($preparser) => $preparser !== $callable
+        ));
+    }
+
+    /**
+     * Removes a previously registered source transformer.
+     *
+     * @return void
+     */
+    public function removeBeforeComponentCompilation(callable $callable)
+    {
+        $this->beforeComponentCompilationCallbacks = array_values(array_filter(
+            $this->beforeComponentCompilationCallbacks,
+            fn ($callback) => $callback !== $callable
+        ));
     }
 
     /**
@@ -160,7 +229,27 @@ class RuntimeConfiguration
      */
     public function addVisitor(NodeVisitorContract $visitor)
     {
+        if (in_array($visitor, $this->visitors, true)) {
+            return;
+        }
+
         $this->visitors[] = $visitor;
+        RuntimeParser::clearRenderNodeCache();
+    }
+
+    /**
+     * Removes a previously registered node visitor.
+     *
+     * @return void
+     */
+    public function removeVisitor(NodeVisitorContract $visitor)
+    {
+        $this->visitors = array_values(array_filter(
+            $this->visitors,
+            fn ($registered) => $registered !== $visitor
+        ));
+
+        RuntimeParser::clearRenderNodeCache();
     }
 
     /**

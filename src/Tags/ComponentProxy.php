@@ -8,6 +8,7 @@ use Illuminate\View\Compilers\BladeCompiler;
 use Illuminate\View\Compilers\ComponentTagCompiler;
 use Illuminate\View\ComponentAttributeBag;
 use ReflectionClass;
+use Statamic\View\Instrumentation\InstrumentationState;
 use Throwable;
 
 class ComponentProxy extends Tags
@@ -83,10 +84,14 @@ class ComponentProxy extends Tags
 
                 self::$componentStack[] = [$component, $contextData];
 
-                echo $this->parse($contextData);
+                echo InstrumentationState::whileParsingComponentContent(
+                    fn () => $this->parse($contextData)
+                );
             }
 
-            $result = $__env->renderComponent();
+            $result = InstrumentationState::whileRenderingComponentView(
+                fn () => $__env->renderComponent()
+            );
 
             $__env->decrementRender();
             $__env->flushStateIfDoneRendering();
@@ -114,7 +119,9 @@ class ComponentProxy extends Tags
 
             $__env->slot($slot, null, $context);
 
-            echo $this->parse($contextData);
+            echo InstrumentationState::whileParsingComponentContent(
+                fn () => $this->parse($contextData)
+            );
 
             $__env->endSlot();
         } catch (Throwable $e) {
